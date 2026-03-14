@@ -12,7 +12,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:leetbridge.setupAuth"
+    "onCommand:leetbridge.setupAuth",
+    "onCommand:leetbridge.fetch"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -20,6 +21,11 @@
       {
         "command": "leetbridge.setupAuth",
         "title": "LeetBridge: Setup Authentication",
+        "category": "LeetBridge"
+      },
+      {
+        "command": "leetbridge.fetch",
+        "title": "LeetBridge: Fetch Problem",
         "category": "LeetBridge"
       }
     ],
