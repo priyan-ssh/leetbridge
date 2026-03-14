@@ -1,0 +1,73 @@
+{
+  "name": "leetbridge",
+  "displayName": "LeetBridge",
+  "description": "VS Code extension to fetch LeetCode problems and scaffold local coding setup.",
+  "version": "0.0.1",
+  "publisher": "leetbridge",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:leetbridge.setupAuth"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "leetbridge.setupAuth",
+        "title": "LeetBridge: Setup Authentication",
+        "category": "LeetBridge"
+      }
+    ],
+    "configuration": {
+      "title": "LeetBridge",
+      "properties": {
+        "leetbridge.leetcodeSessionToken": {
+          "type": "string",
+          "default": "",
+          "description": "LeetCode LEETCODE_SESSION cookie value used for authenticated GraphQL requests.",
+          "scope": "application"
+        },
+        "leetbridge.csrfToken": {
+          "type": "string",
+          "default": "",
+          "description": "LeetCode csrftoken cookie value used for authenticated GraphQL requests.",
+          "scope": "application"
+        },
+        "leetbridge.defaultLanguage": {
+          "type": "string",
+          "default": "python",
+          "enum": [
+            "python",
+            "javascript",
+            "java",
+            "cpp"
+          ],
+          "enumDescriptions": [
+            "Python",
+            "JavaScript",
+            "Java",
+            "C++"
+          ],
+          "description": "Default language used when creating local problem scaffolds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "pnpm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.2"
+  }
+}
