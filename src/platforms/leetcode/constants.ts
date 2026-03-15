@@ -3,6 +3,9 @@ import { PLATFORMS } from "../types";
 export const LEETCODE_PLATFORM = PLATFORMS.LEETCODE;
 export const LEETCODE_BASE_URL = "https://leetcode.com";
 export const LEETCODE_GRAPHQL_ENDPOINT = `${LEETCODE_BASE_URL}/graphql`;
+export const LEETCODE_SUBMISSIONS_PATH_SEGMENT = "submissions";
+export const LEETCODE_SUBMIT_PATH_SEGMENT = "submit";
+export const LEETCODE_CHECK_PATH_SEGMENT = "check";
 export const LEETCODE_HOSTNAME_PATTERN = /(^|\.)leetcode\.com$/i;
 export const LEETCODE_PROBLEM_PATH_SEGMENT = "problems";
 
@@ -41,6 +44,11 @@ export const LEETCODE_RETRY_POLICY = {
   maxJitterMs: 300
 } as const;
 
+export const LEETCODE_SUBMISSION_POLL_POLICY = {
+  intervalMs: 1_500,
+  timeoutMs: 60_000
+} as const;
+
 export const LEETCODE_HEADERS = {
   contentType: "content-type",
   origin: "origin",
@@ -76,5 +84,10 @@ export const LEETCODE_ERRORS = {
   requestFailed: "LeetCode request failed with status {{status}}.",
   apiError: "LeetCode API error: {{message}}",
   questionNotFound: "Could not find a LeetCode problem for slug \"{{slug}}\".",
-  fetchFailedAfterRetries: "Failed to reach LeetCode after retries: {{message}}"
+  questionIdNotFound: "Could not resolve LeetCode question ID for slug \"{{slug}}\".",
+  fetchFailedAfterRetries: "Failed to reach LeetCode after retries: {{message}}",
+  missingSubmissionId:
+    "LeetCode submit response did not include a submission ID.",
+  pollingTimedOut:
+    "Timed out waiting for LeetCode submission {{submissionId}} verdict after {{timeoutMs}}ms."
 } as const;

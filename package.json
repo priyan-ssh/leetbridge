@@ -13,7 +13,9 @@
   ],
   "activationEvents": [
     "onCommand:leetbridge.setupAuth",
-    "onCommand:leetbridge.fetch"
+    "onCommand:leetbridge.fetch",
+    "onCommand:leetbridge.run",
+    "onCommand:leetbridge.submit"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -26,6 +28,16 @@
       {
         "command": "leetbridge.fetch",
         "title": "LeetBridge: Fetch Problem",
+        "category": "LeetBridge"
+      },
+      {
+        "command": "leetbridge.submit",
+        "title": "LeetBridge: Submit Solution",
+        "category": "LeetBridge"
+      },
+      {
+        "command": "leetbridge.run",
+        "title": "LeetBridge: Run Active Solution",
         "category": "LeetBridge"
       }
     ],

@@ -17,7 +17,8 @@ function createAdapter(canHandle: boolean): IPlatformAdapter {
   return {
     platform: PLATFORMS.LEETCODE,
     canHandle: vi.fn(() => canHandle),
-    fetchProblem: vi.fn()
+    fetchProblem: vi.fn(),
+    submitCode: vi.fn()
   };
 }
 

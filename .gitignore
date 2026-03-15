@@ -4,3 +4,5 @@ dist/
 architecture.md
 .DS_Store
 pnpm-debug.log*
+opencode.json
+OPEN_ISSUES.local.md

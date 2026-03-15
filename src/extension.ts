@@ -2,7 +2,8 @@ import * as vscode from "vscode";
 import {
   getLeetBridgeConfig,
   LEETBRIDGE_CONFIG,
-  type LeetBridgeConfig
+  type LeetBridgeConfig,
+  type LeetBridgeLanguage
 } from "./config";
 import {
   COMMAND_IDS,
@@ -14,7 +15,7 @@ import {
 } from "./constants";
 import { PlatformFactory } from "./platforms/PlatformFactory";
 import type { PlatformLogger } from "./platforms/logger";
-import { PLATFORMS } from "./platforms/types";
+import { PLATFORMS, type SubmissionResult } from "./platforms/types";
 import { isSupportedProblemUrlProtocol } from "./platforms/urlValidation";
 import { getCurrentProblemContext, setCurrentProblemContext } from "./state";
 
@@ -53,10 +54,26 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
+  const submitDisposable = vscode.commands.registerCommand(
+    COMMAND_IDS.submit,
+    withCommandErrorHandling(COMMAND_IDS.submit, outputChannel, async () => {
+      await runSubmitCommand(context, platformFactory, logger);
+    })
+  );
+
+  const runDisposable = vscode.commands.registerCommand(
+    COMMAND_IDS.run,
+    withCommandErrorHandling(COMMAND_IDS.run, outputChannel, async () => {
+      await runRunCommand(logger);
+    })
+  );
+
   context.subscriptions.push(
     outputChannel,
     setupAuthDisposable,
-    fetchProblemDisposable
+    fetchProblemDisposable,
+    runDisposable,
+    submitDisposable
   );
 }
 
@@ -110,6 +127,7 @@ async function runFetchProblemCommand(
     platform: problem.platform,
     url: problem.url,
     slug: problem.slug,
+    problemId: problem.problemId,
     language: config.defaultLanguage,
     fetchedAt: new Date().toISOString()
   });
@@ -121,6 +139,152 @@ async function runFetchProblemCommand(
       .replace("{{title}}", problem.title)
       .replace("{{difficulty}}", problem.difficulty)
   );
+}
+
+async function runSubmitCommand(
+  context: vscode.ExtensionContext,
+  platformFactory: PlatformFactory,
+  logger: PlatformLogger
+): Promise<void> {
+  const currentProblemContext = getCurrentProblemContext(context);
+
+  if (!currentProblemContext) {
+    throw new Error(UI_TEXT.submitRequiresContext);
+  }
+
+  const activeEditor = vscode.window.activeTextEditor;
+
+  if (!activeEditor) {
+    throw new Error(UI_TEXT.submitRequiresEditor);
+  }
+
+  if (!activeEditor.document.getText().trim()) {
+    throw new Error(UI_TEXT.submitRequiresCode);
+  }
+
+  logger.info(
+    `Starting submit flow for ${currentProblemContext.platform}:${currentProblemContext.slug}`
+  );
+
+  const config = getLeetBridgeConfig();
+  const adapter = platformFactory.resolveAdapter(currentProblemContext.url);
+
+  if (adapter.platform === PLATFORMS.LEETCODE) {
+    const missingFields = getMissingAuthFields(config);
+
+    if (missingFields.length > 0) {
+      await promptToOpenSettings(missingFields);
+      return;
+    }
+  }
+
+  const code = activeEditor.document.getText();
+
+  if (!code.trim()) {
+    throw new Error(UI_TEXT.submitRequiresCode);
+  }
+
+  const submitLanguage = resolveSubmissionLanguage(
+    activeEditor.document.languageId,
+    currentProblemContext.language,
+    logger
+  );
+
+  const submissionResult = await adapter.submitCode({
+    problemUrl: currentProblemContext.url,
+    slug: currentProblemContext.slug,
+    problemId: currentProblemContext.problemId,
+    language: submitLanguage,
+    code,
+    config,
+    logger
+  });
+
+  await setCurrentProblemContext(context, {
+    ...currentProblemContext,
+    lastSubmissionId: submissionResult.submissionId,
+    lastSubmissionVerdict: submissionResult.verdict,
+    lastSubmissionCheckedAt: submissionResult.checkedAt
+  });
+
+  logger.info(
+    `Submission completed for ${currentProblemContext.slug}: ${submissionResult.verdict}`
+  );
+
+  void vscode.window.showInformationMessage(
+    formatSubmissionResultMessage(submissionResult)
+  );
+}
+
+async function runRunCommand(logger: PlatformLogger): Promise<void> {
+  const activeEditor = vscode.window.activeTextEditor;
+
+  if (!activeEditor) {
+    throw new Error(UI_TEXT.runRequiresEditor);
+  }
+
+  if (!activeEditor.document.getText().trim()) {
+    throw new Error(UI_TEXT.runRequiresCode);
+  }
+
+  logger.info("Starting run flow for active editor");
+
+  const didSave = await activeEditor.document.save();
+
+  if (!didSave) {
+    logger.info("Run cancelled because active editor save did not complete");
+    void vscode.window.showInformationMessage(UI_TEXT.runCancelledSaveIncomplete);
+    return;
+  }
+
+  await vscode.commands.executeCommand(VSCODE_COMMANDS.runActiveFile);
+
+  logger.info("Run command launched in active terminal");
+  void vscode.window.showInformationMessage(UI_TEXT.runStarted);
+}
+
+function resolveSubmissionLanguage(
+  editorLanguageId: string,
+  fallbackLanguage: LeetBridgeLanguage,
+  logger: PlatformLogger
+): LeetBridgeLanguage {
+  const mappedLanguage = mapEditorLanguageIdToSubmitLanguage(editorLanguageId);
+
+  if (mappedLanguage) {
+    logger.debug(
+      `Resolved submit language from active editor languageId "${editorLanguageId}": ${mappedLanguage}`
+    );
+    return mappedLanguage;
+  }
+
+  logger.info(
+    `Active editor languageId "${editorLanguageId}" is unsupported for submit. Falling back to context language "${fallbackLanguage}".`
+  );
+  return fallbackLanguage;
+}
+
+function mapEditorLanguageIdToSubmitLanguage(
+  editorLanguageId: string
+): LeetBridgeLanguage | undefined {
+  const normalizedLanguageId = editorLanguageId.trim().toLowerCase();
+
+  if (normalizedLanguageId === "python") {
+    return "python";
+  }
+
+  if (normalizedLanguageId === "javascript") {
+    return "javascript";
+  }
+
+  if (normalizedLanguageId === "java") {
+    return "java";
+  }
+
+  if (normalizedLanguageId === "cpp" || normalizedLanguageId === "c++") {
+    return "cpp";
+  }
+
+  return undefined;
 }
 
 async function promptForProblemUrl(): Promise<string | undefined> {
@@ -229,6 +393,45 @@ function toUserErrorMessage(error: unknown): string {
   }
 
   return UI_TEXT.unknownError;
+}
+
+function formatSubmissionResultMessage(result: SubmissionResult): string {
+  const parts: string[] = [`${result.verdict}`];
+
+  if (result.metrics.runtime) {
+    parts.push(
+      formatMetricPart(
+        `Runtime ${result.metrics.runtime}`,
+        result.metrics.runtimePercentile
+      )
+    );
+  }
+
+  if (result.metrics.memory) {
+    parts.push(
+      formatMetricPart(
+        `Memory ${result.metrics.memory}`,
+        result.metrics.memoryPercentile
+      )
+    );
+  }
+
+  if (
+    result.passedTestCount !== undefined &&
+    result.totalTestCount !== undefined
+  ) {
+    parts.push(`${result.passedTestCount}/${result.totalTestCount} tests`);
+  }
+
+  return parts.join(" | ");
+}
+
+function formatMetricPart(label: string, percentile: number | undefined): string {
+  if (percentile === undefined) {
+    return label;
+  }
+
+  return `${label} (${percentile.toFixed(2)}%)`;
 }
 
 function createOutputChannelLogger(

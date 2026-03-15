@@ -7,6 +7,7 @@ export interface LeetCodeCodeSnippetDto {
 }
 
 export interface LeetCodeQuestionDto {
+  questionId?: string;
   title: string;
   titleSlug: string;
   content: string;
@@ -37,4 +38,26 @@ export interface LeetCodeQuestionDataRequestBody {
   operationName: (typeof LEETCODE_GRAPHQL_OPERATIONS)["questionData"];
   variables: LeetCodeQuestionDataVariables;
   query: string;
+}
+
+export interface LeetCodeSubmitCodeRequestBody {
+  lang: string;
+  question_id: string;
+  typed_code: string;
+}
+
+export interface LeetCodeSubmitCodeResponse {
+  submission_id?: number | string;
+}
+
+export interface LeetCodeCheckSubmissionResponse {
+  state?: string;
+  status_msg?: string;
+  status_code?: number;
+  runtime?: string;
+  memory?: string;
+  runtime_percentile?: number | string;
+  memory_percentile?: number | string;
+  total_correct?: number;
+  total_testcases?: number;
 }
