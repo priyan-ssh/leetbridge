@@ -67,6 +67,7 @@
   "scripts": {
     "build": "vite build",
     "watch": "vite build --watch",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "vscode:prepublish": "pnpm run build"
   },
@@ -74,6 +75,7 @@
     "@types/node": "^22.13.10",
     "@types/vscode": "^1.96.0",
     "typescript": "^5.7.3",
-    "vite": "^6.2.2"
+    "vite": "^6.2.2",
+    "vitest": "^4.1.0"
   }
 }

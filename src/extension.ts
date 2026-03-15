@@ -1,36 +1,56 @@
 import * as vscode from "vscode";
-import { getLeetBridgeConfig, type LeetBridgeConfig } from "./config";
+import {
+  getLeetBridgeConfig,
+  LEETBRIDGE_CONFIG,
+  type LeetBridgeConfig
+} from "./config";
+import {
+  COMMAND_IDS,
+  OUTPUT_CHANNEL_NAME,
+  SETTINGS_SEARCH_QUERY,
+  UI_TEXT,
+  USER_ACTIONS,
+  VSCODE_COMMANDS
+} from "./constants";
 import { PlatformFactory } from "./platforms/PlatformFactory";
+import type { PlatformLogger } from "./platforms/logger";
+import { PLATFORMS } from "./platforms/types";
+import { isSupportedProblemUrlProtocol } from "./platforms/urlValidation";
 import { getCurrentProblemContext, setCurrentProblemContext } from "./state";
-
-const SETUP_AUTH_COMMAND = "leetbridge.setupAuth";
-const FETCH_PROBLEM_COMMAND = "leetbridge.fetch";
-const OPEN_SETTINGS_ACTION = "Open Settings";
 
 type AsyncCommandHandler = () => Promise<void>;
 
 export function activate(context: vscode.ExtensionContext): void {
-  const outputChannel = vscode.window.createOutputChannel("LeetBridge");
-  const platformFactory = new PlatformFactory();
+  const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+  const logger = createOutputChannelLogger(outputChannel);
+  const platformFactory = new PlatformFactory({ logger });
 
   const restoredContext = getCurrentProblemContext(context);
 
   if (restoredContext) {
-    outputChannel.appendLine(
-      `[${new Date().toISOString()}] Restored problem context ${restoredContext.platform}:${restoredContext.slug}`
+    logger.info(
+      `Restored problem context ${restoredContext.platform}:${restoredContext.slug}`
     );
   }
 
   const setupAuthDisposable = vscode.commands.registerCommand(
-    SETUP_AUTH_COMMAND,
-    withCommandErrorHandling(SETUP_AUTH_COMMAND, outputChannel, runSetupAuthCommand)
+    COMMAND_IDS.setupAuth,
+    withCommandErrorHandling(
+      COMMAND_IDS.setupAuth,
+      outputChannel,
+      runSetupAuthCommand
+    )
   );
 
   const fetchProblemDisposable = vscode.commands.registerCommand(
-    FETCH_PROBLEM_COMMAND,
-    withCommandErrorHandling(FETCH_PROBLEM_COMMAND, outputChannel, async () => {
-      await runFetchProblemCommand(context, platformFactory, outputChannel);
-    })
+    COMMAND_IDS.fetchProblem,
+    withCommandErrorHandling(
+      COMMAND_IDS.fetchProblem,
+      outputChannel,
+      async () => {
+        await runFetchProblemCommand(context, platformFactory, logger);
+      }
+    )
   );
 
   context.subscriptions.push(
@@ -47,9 +67,7 @@ async function runSetupAuthCommand(): Promise<void> {
   const missingFields = getMissingAuthFields(config);
 
   if (missingFields.length === 0) {
-    void vscode.window.showInformationMessage(
-      "LeetBridge authentication is configured."
-    );
+    void vscode.window.showInformationMessage(UI_TEXT.setupAuthConfigured);
     return;
   }
 
@@ -59,18 +77,21 @@ async function runSetupAuthCommand(): Promise<void> {
 async function runFetchProblemCommand(
   context: vscode.ExtensionContext,
   platformFactory: PlatformFactory,
-  outputChannel: vscode.OutputChannel
+  logger: PlatformLogger
 ): Promise<void> {
   const problemUrl = await promptForProblemUrl();
 
   if (!problemUrl) {
+    logger.debug("Fetch problem command cancelled before URL submission");
     return;
   }
+
+  logger.info(`Starting problem fetch flow for URL: ${problemUrl}`);
 
   const config = getLeetBridgeConfig();
   const adapter = platformFactory.resolveAdapter(problemUrl);
 
-  if (adapter.platform === "leetcode") {
+  if (adapter.platform === PLATFORMS.LEETCODE) {
     const missingFields = getMissingAuthFields(config);
 
     if (missingFields.length > 0) {
@@ -81,7 +102,8 @@ async function runFetchProblemCommand(
 
   const problem = await adapter.fetchProblem({
     problemUrl,
-    config
+    config,
+    logger
   });
 
   await setCurrentProblemContext(context, {
@@ -92,34 +114,34 @@ async function runFetchProblemCommand(
     fetchedAt: new Date().toISOString()
   });
 
-  outputChannel.appendLine(
-    `[${new Date().toISOString()}] Fetched ${problem.platform}:${problem.slug}`
-  );
+  logger.info(`Fetched ${problem.platform}:${problem.slug}`);
 
   void vscode.window.showInformationMessage(
-    `Fetched "${problem.title}" (${problem.difficulty}) and saved problem context.`
+    UI_TEXT.fetchSuccess
+      .replace("{{title}}", problem.title)
+      .replace("{{difficulty}}", problem.difficulty)
   );
 }
 
 async function promptForProblemUrl(): Promise<string | undefined> {
   const result = await vscode.window.showInputBox({
-    title: "LeetBridge: Fetch Problem",
-    prompt: "Paste a problem URL to fetch metadata and save context.",
-    placeHolder: "https://leetcode.com/problems/two-sum/",
+    title: UI_TEXT.fetchInputTitle,
+    prompt: UI_TEXT.fetchInputPrompt,
+    placeHolder: UI_TEXT.fetchInputPlaceholder,
     ignoreFocusOut: true,
     validateInput: (value: string) => {
       if (!value.trim()) {
-        return "Problem URL is required.";
+        return UI_TEXT.problemUrlRequired;
       }
 
       try {
         const parsed = new URL(value.trim());
 
-        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-          return "Problem URL must use HTTP or HTTPS.";
+        if (!isSupportedProblemUrlProtocol(parsed.protocol)) {
+          return UI_TEXT.invalidProblemUrlProtocol;
         }
       } catch {
-        return "Enter a valid URL.";
+        return UI_TEXT.invalidProblemUrl;
       }
 
       return undefined;
@@ -133,11 +155,11 @@ function getMissingAuthFields(config: LeetBridgeConfig): string[] {
   const missingFields: string[] = [];
 
   if (!config.leetcodeSessionToken) {
-    missingFields.push("leetcodeSessionToken");
+    missingFields.push(LEETBRIDGE_CONFIG.keys.leetcodeSessionToken);
   }
 
   if (!config.csrfToken) {
-    missingFields.push("csrfToken");
+    missingFields.push(LEETBRIDGE_CONFIG.keys.csrfToken);
   }
 
   return missingFields;
@@ -145,16 +167,14 @@ function getMissingAuthFields(config: LeetBridgeConfig): string[] {
 
 async function promptToOpenSettings(missingFields: string[]): Promise<void> {
   const choice = await vscode.window.showWarningMessage(
-    `LeetBridge authentication is incomplete. Missing ${missingFields.join(
-      " and "
-    )}. Open settings and paste your LeetCode browser cookies.`,
-    OPEN_SETTINGS_ACTION
+    UI_TEXT.setupAuthMissing.replace("{{fields}}", missingFields.join(" and ")),
+    USER_ACTIONS.openSettings
   );
 
-  if (choice === OPEN_SETTINGS_ACTION) {
+  if (choice === USER_ACTIONS.openSettings) {
     await vscode.commands.executeCommand(
-      "workbench.action.openSettings",
-      "LeetBridge"
+      VSCODE_COMMANDS.openSettings,
+      SETTINGS_SEARCH_QUERY
     );
   }
 }
@@ -165,8 +185,16 @@ function withCommandErrorHandling(
   handler: AsyncCommandHandler
 ): () => Promise<void> {
   return async () => {
+    outputChannel.appendLine(
+      `[${new Date().toISOString()}] Command started: ${commandName}`
+    );
+
     try {
       await handler();
+
+      outputChannel.appendLine(
+        `[${new Date().toISOString()}] Command completed: ${commandName}`
+      );
     } catch (error) {
       logCommandError(commandName, error, outputChannel);
       void vscode.window.showErrorMessage(toUserErrorMessage(error));
@@ -200,5 +228,28 @@ function toUserErrorMessage(error: unknown): string {
     return error.message;
   }
 
-  return "LeetBridge hit an unexpected error. Check the LeetBridge output channel.";
+  return UI_TEXT.unknownError;
+}
+
+function createOutputChannelLogger(
+  outputChannel: vscode.OutputChannel
+): PlatformLogger {
+  const append = (level: "DEBUG" | "INFO" | "WARN" | "ERROR", message: string) => {
+    outputChannel.appendLine(`[${new Date().toISOString()}] [${level}] ${message}`);
+  };
+
+  return {
+    debug: (message: string) => {
+      append("DEBUG", message);
+    },
+    info: (message: string) => {
+      append("INFO", message);
+    },
+    warn: (message: string) => {
+      append("WARN", message);
+    },
+    error: (message: string) => {
+      append("ERROR", message);
+    }
+  };
 }

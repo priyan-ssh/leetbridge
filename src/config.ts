@@ -2,6 +2,15 @@ import * as vscode from "vscode";
 
 export type LeetBridgeLanguage = "python" | "javascript" | "java" | "cpp";
 
+export const LEETBRIDGE_CONFIG = {
+  section: "leetbridge",
+  keys: {
+    leetcodeSessionToken: "leetcodeSessionToken",
+    csrfToken: "csrfToken",
+    defaultLanguage: "defaultLanguage"
+  }
+} as const;
+
 export interface LeetBridgeConfig {
   leetcodeSessionToken: string;
   csrfToken: string;
@@ -16,16 +25,18 @@ const SUPPORTED_LANGUAGES: LeetBridgeLanguage[] = [
 ];
 
 export function getLeetBridgeConfig(): LeetBridgeConfig {
-  const config = vscode.workspace.getConfiguration("leetbridge");
+  const config = vscode.workspace.getConfiguration(LEETBRIDGE_CONFIG.section);
 
   const leetcodeSessionToken = config
-    .get<string>("leetcodeSessionToken", "")
+    .get<string>(LEETBRIDGE_CONFIG.keys.leetcodeSessionToken, "")
     .trim();
 
-  const csrfToken = config.get<string>("csrfToken", "").trim();
+  const csrfToken = config
+    .get<string>(LEETBRIDGE_CONFIG.keys.csrfToken, "")
+    .trim();
 
   const configuredLanguage = config
-    .get<string>("defaultLanguage", "python")
+    .get<string>(LEETBRIDGE_CONFIG.keys.defaultLanguage, "python")
     .toLowerCase();
 
   const defaultLanguage: LeetBridgeLanguage = SUPPORTED_LANGUAGES.includes(

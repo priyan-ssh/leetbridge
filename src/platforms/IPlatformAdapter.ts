@@ -1,9 +1,11 @@
 import type { LeetBridgeConfig } from "../config";
+import type { PlatformLogger } from "./logger";
 import type { Platform, ProblemData } from "./types";
 
 export interface FetchProblemInput {
   problemUrl: string;
   config: LeetBridgeConfig;
+  logger?: PlatformLogger;
 }
 
 export interface IPlatformAdapter {

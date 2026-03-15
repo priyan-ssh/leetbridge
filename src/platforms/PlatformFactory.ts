@@ -1,20 +1,47 @@
 import type { IPlatformAdapter } from "./IPlatformAdapter";
+import { noopPlatformLogger, type PlatformLogger } from "./logger";
 import { LeetCodeAdapter } from "./leetcode/LeetCodeAdapter";
+import { isSupportedProblemUrlProtocol } from "./urlValidation";
 
 const DEFAULT_ADAPTERS: IPlatformAdapter[] = [new LeetCodeAdapter()];
+const ERROR_MESSAGES = {
+  invalidAbsoluteUrl: "Please provide a valid absolute problem URL.",
+  unsupportedProtocol: "Problem URL must use HTTP or HTTPS.",
+  unsupportedPlatform:
+    "Unsupported platform for URL \"{{url}}\". Add an adapter for this host before fetching."
+} as const;
+
+interface PlatformFactoryOptions {
+  adapters?: IPlatformAdapter[];
+  logger?: PlatformLogger;
+}
 
 export class PlatformFactory {
-  constructor(private readonly adapters: IPlatformAdapter[] = DEFAULT_ADAPTERS) {}
+  private readonly adapters: IPlatformAdapter[];
+  private readonly logger: PlatformLogger;
+
+  constructor(options: PlatformFactoryOptions = {}) {
+    this.adapters = options.adapters ?? DEFAULT_ADAPTERS;
+    this.logger = options.logger ?? noopPlatformLogger;
+  }
 
   resolveAdapter(problemUrl: string): IPlatformAdapter {
+    this.logger.debug(`Resolving adapter for URL: ${problemUrl}`);
+
     const parsedUrl = this.parseProblemUrl(problemUrl);
     const adapter = this.adapters.find((candidate) => candidate.canHandle(parsedUrl));
 
     if (!adapter) {
+      this.logger.warn(`No adapter found for host: ${parsedUrl.hostname}`);
+
       throw new Error(
-        `Unsupported platform for URL "${problemUrl}". Add an adapter for this host before fetching.`
+        ERROR_MESSAGES.unsupportedPlatform.replace("{{url}}", problemUrl)
       );
     }
+
+    this.logger.info(
+      `Resolved ${adapter.platform} adapter for host: ${parsedUrl.hostname}`
+    );
 
     return adapter;
   }
@@ -25,11 +52,13 @@ export class PlatformFactory {
     try {
       parsedUrl = new URL(problemUrl);
     } catch {
-      throw new Error("Please provide a valid absolute problem URL.");
+      this.logger.warn(`Invalid absolute URL received: ${problemUrl}`);
+      throw new Error(ERROR_MESSAGES.invalidAbsoluteUrl);
     }
 
-    if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
-      throw new Error("Problem URL must use HTTP or HTTPS.");
+    if (!isSupportedProblemUrlProtocol(parsedUrl.protocol)) {
+      this.logger.warn(`Unsupported URL protocol received: ${parsedUrl.protocol}`);
+      throw new Error(ERROR_MESSAGES.unsupportedProtocol);
     }
 
     return parsedUrl;

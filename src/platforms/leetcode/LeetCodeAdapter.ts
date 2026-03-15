@@ -1,211 +1,158 @@
 import type { FetchProblemInput, IPlatformAdapter } from "../IPlatformAdapter";
-import type { ProblemData, ProblemDifficulty } from "../types";
-
-const LEETCODE_GRAPHQL_ENDPOINT = "https://leetcode.com/graphql";
-const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
-const MAX_RETRIES = 3;
-const BASE_RETRY_DELAY_MS = 1_000;
-
-const LEETCODE_QUESTION_QUERY = `
-  query questionData($titleSlug: String!) {
-    question(titleSlug: $titleSlug) {
-      title
-      titleSlug
-      content
-      difficulty
-      codeSnippets {
-        lang
-        langSlug
-        code
-      }
-    }
-  }
-`;
-
-interface LeetCodeGraphQlQuestion {
-  title: string;
-  titleSlug: string;
-  content: string;
-  difficulty: string;
-  codeSnippets?: Array<{
-    lang: string;
-    langSlug: string;
-    code: string;
-  }> | null;
-}
-
-interface LeetCodeGraphQlResponse {
-  data?: {
-    question?: LeetCodeGraphQlQuestion | null;
-  };
-  errors?: Array<{
-    message: string;
-  }>;
-}
+import { noopPlatformLogger, type PlatformLogger } from "../logger";
+import type { ProblemData } from "../types";
+import {
+  LEETCODE_BASE_URL,
+  HTTP_METHODS,
+  HTTP_STATUS_CODES,
+  LEETCODE_AUTH_FAILURE_STATUS_CODES,
+  LEETCODE_COOKIE_KEYS,
+  LEETCODE_ERRORS,
+  LEETCODE_GRAPHQL_ENDPOINT,
+  LEETCODE_GRAPHQL_OPERATIONS,
+  LEETCODE_HEADERS,
+  LEETCODE_HEADER_VALUES,
+  LEETCODE_PLATFORM
+} from "./constants";
+import { mapLeetCodeQuestionToProblemData } from "./mapper";
+import { LEETCODE_GRAPHQL_QUERIES } from "./queries";
+import { fetchWithRetry } from "./retry";
+import type {
+  LeetCodeQuestionDataRequestBody,
+  LeetCodeQuestionDataResponse
+} from "./types";
+import { extractLeetCodeSlug, isLeetCodeHost, parseLeetCodeProblemUrl } from "./url";
 
 export class LeetCodeAdapter implements IPlatformAdapter {
-  readonly platform = "leetcode" as const;
+  readonly platform = LEETCODE_PLATFORM;
 
   canHandle(url: URL): boolean {
-    return /(^|\.)leetcode\.com$/i.test(url.hostname);
+    return isLeetCodeHost(url);
   }
 
   async fetchProblem(input: FetchProblemInput): Promise<ProblemData> {
-    const parsedUrl = this.parseProblemUrl(input.problemUrl);
-    const slug = this.extractSlug(parsedUrl);
+    const logger = input.logger ?? noopPlatformLogger;
 
-    this.assertAuthTokens(input);
+    logger.info(`Fetching LeetCode problem for URL: ${input.problemUrl}`);
 
-    const response = await this.fetchWithBackoff(() =>
-      fetch(LEETCODE_GRAPHQL_ENDPOINT, {
-        method: "POST",
-        headers: this.buildHeaders(input, parsedUrl),
-        body: JSON.stringify({
-          operationName: "questionData",
-          variables: {
-            titleSlug: slug
-          },
-          query: LEETCODE_QUESTION_QUERY
-        })
-      })
+    const parsedUrl = parseLeetCodeProblemUrl(input.problemUrl);
+    const slug = extractLeetCodeSlug(parsedUrl);
+
+    logger.debug(`Parsed LeetCode slug: ${slug}`);
+
+    this.assertAuthTokens(input, logger);
+
+    const response = await fetchWithRetry(
+      () =>
+        fetch(LEETCODE_GRAPHQL_ENDPOINT, {
+          method: HTTP_METHODS.post,
+          headers: this.buildHeaders(input, parsedUrl),
+          body: JSON.stringify(this.createQuestionDataRequestBody(slug))
+        }),
+      {
+        logger,
+        requestName: `questionData:${slug}`
+      }
     );
 
-    if (!response.ok) {
-      if (response.status === 429) {
-        throw new Error("LeetCode is rate-limiting us. Give it 10 seconds and retry.");
-      }
+    logger.debug(`Received LeetCode response status: ${response.status}`);
 
-      if (response.status === 401 || response.status === 403) {
-        throw new Error(
-          "LeetCode authentication failed. Refresh your cookie values in LeetBridge settings."
-        );
-      }
+    this.assertSuccessfulResponse(response, logger);
 
-      throw new Error(`LeetCode request failed with status ${response.status}.`);
-    }
-
-    const payload = (await response.json()) as LeetCodeGraphQlResponse;
-
-    if (payload.errors && payload.errors.length > 0) {
-      throw new Error(`LeetCode API error: ${payload.errors[0].message}`);
-    }
+    const payload = (await response.json()) as LeetCodeQuestionDataResponse;
+    this.assertNoGraphQlErrors(payload, logger);
 
     const question = payload.data?.question;
 
     if (!question) {
-      throw new Error(`Could not find a LeetCode problem for slug "${slug}".`);
+      logger.warn(`LeetCode question not found for slug: ${slug}`);
+      throw new Error(LEETCODE_ERRORS.questionNotFound.replace("{{slug}}", slug));
     }
 
-    return {
-      platform: this.platform,
-      url: parsedUrl.toString(),
-      slug: question.titleSlug || slug,
-      title: question.title,
-      content: question.content ?? "",
-      difficulty: toProblemDifficulty(question.difficulty),
-      codeSnippets: (question.codeSnippets ?? []).map((snippet) => ({
-        language: snippet.lang,
-        languageSlug: snippet.langSlug,
-        code: snippet.code
-      }))
-    };
+    const problem = mapLeetCodeQuestionToProblemData({
+      question,
+      fallbackSlug: slug,
+      problemUrl: parsedUrl.toString()
+    });
+
+    logger.info(`Fetched LeetCode problem: ${problem.slug}`);
+
+    return problem;
   }
 
-  private parseProblemUrl(problemUrl: string): URL {
-    let parsedUrl: URL;
-
-    try {
-      parsedUrl = new URL(problemUrl);
-    } catch {
-      throw new Error("Please provide a valid LeetCode problem URL.");
-    }
-
-    if (!this.canHandle(parsedUrl)) {
-      throw new Error("LeetCode adapter received a non-LeetCode URL.");
-    }
-
-    return parsedUrl;
-  }
-
-  private extractSlug(url: URL): string {
-    const pathSegments = url.pathname.split("/").filter(Boolean);
-    const problemsIndex = pathSegments.findIndex((segment) => segment === "problems");
-
-    if (problemsIndex === -1 || !pathSegments[problemsIndex + 1]) {
-      throw new Error(
-        "Could not parse problem slug from URL. Expected format: https://leetcode.com/problems/<slug>/"
-      );
-    }
-
-    return pathSegments[problemsIndex + 1];
-  }
-
-  private assertAuthTokens(input: FetchProblemInput): void {
+  private assertAuthTokens(input: FetchProblemInput, logger: PlatformLogger): void {
     if (!input.config.leetcodeSessionToken || !input.config.csrfToken) {
-      throw new Error(
-        "LeetCode authentication is incomplete. Run 'LeetBridge: Setup Authentication' first."
-      );
+      logger.warn("Missing LeetCode authentication tokens in extension settings");
+      throw new Error(LEETCODE_ERRORS.missingAuth);
     }
   }
 
-  private buildHeaders(input: FetchProblemInput, parsedUrl: URL): Record<string, string> {
+  private buildHeaders(
+    input: FetchProblemInput,
+    parsedUrl: URL
+  ): Record<string, string> {
     return {
-      "content-type": "application/json",
-      origin: "https://leetcode.com",
-      referer: parsedUrl.toString(),
-      "x-csrftoken": input.config.csrfToken,
-      cookie: `LEETCODE_SESSION=${input.config.leetcodeSessionToken}; csrftoken=${input.config.csrfToken}`
+      [LEETCODE_HEADERS.contentType]: LEETCODE_HEADER_VALUES.jsonContentType,
+      [LEETCODE_HEADERS.origin]: LEETCODE_BASE_URL,
+      [LEETCODE_HEADERS.referer]: parsedUrl.toString(),
+      [LEETCODE_HEADERS.csrfToken]: input.config.csrfToken,
+      [LEETCODE_HEADERS.cookie]: this.buildCookieHeaderValue(input)
     };
   }
 
-  private async fetchWithBackoff(requestFactory: () => Promise<Response>): Promise<Response> {
-    let attempt = 0;
+  private buildCookieHeaderValue(input: FetchProblemInput): string {
+    return `${LEETCODE_COOKIE_KEYS.session}=${input.config.leetcodeSessionToken}; ${LEETCODE_COOKIE_KEYS.csrf}=${input.config.csrfToken}`;
+  }
 
-    while (attempt <= MAX_RETRIES) {
-      try {
-        const response = await requestFactory();
+  private createQuestionDataRequestBody(
+    slug: string
+  ): LeetCodeQuestionDataRequestBody {
+    return {
+      operationName: LEETCODE_GRAPHQL_OPERATIONS.questionData,
+      variables: {
+        titleSlug: slug
+      },
+      query: LEETCODE_GRAPHQL_QUERIES[LEETCODE_GRAPHQL_OPERATIONS.questionData]
+    };
+  }
 
-        if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_RETRIES) {
-          return response;
-        }
-      } catch (error) {
-        if (attempt === MAX_RETRIES) {
-          throw new Error(`Failed to reach LeetCode after retries: ${toErrorMessage(error)}`);
-        }
-      }
-
-      await sleep(getRetryDelay(attempt));
-      attempt += 1;
+  private assertSuccessfulResponse(
+    response: Response,
+    logger: PlatformLogger
+  ): void {
+    if (response.ok) {
+      return;
     }
 
-    throw new Error("Unexpected retry loop termination while contacting LeetCode.");
-  }
-}
+    if (response.status === HTTP_STATUS_CODES.tooManyRequests) {
+      logger.warn("LeetCode request hit a rate-limit response");
+      throw new Error(LEETCODE_ERRORS.rateLimited);
+    }
 
-function toProblemDifficulty(rawDifficulty: string | undefined): ProblemDifficulty {
-  if (rawDifficulty === "Easy" || rawDifficulty === "Medium" || rawDifficulty === "Hard") {
-    return rawDifficulty;
-  }
+    if (LEETCODE_AUTH_FAILURE_STATUS_CODES.has(response.status)) {
+      logger.warn("LeetCode request failed due to authentication status");
+      throw new Error(LEETCODE_ERRORS.authenticationFailed);
+    }
 
-  return "Unknown";
-}
+    logger.error(`LeetCode request failed with status ${response.status}`);
 
-function getRetryDelay(attempt: number): number {
-  const exponentialDelay = BASE_RETRY_DELAY_MS * 2 ** attempt;
-  const jitter = Math.floor(Math.random() * 300);
-  return exponentialDelay + jitter;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
+    throw new Error(
+      LEETCODE_ERRORS.requestFailed.replace("{{status}}", String(response.status))
+    );
   }
 
-  return String(error);
+  private assertNoGraphQlErrors(
+    payload: LeetCodeQuestionDataResponse,
+    logger: PlatformLogger
+  ): void {
+    if (!payload.errors || payload.errors.length === 0) {
+      return;
+    }
+
+    logger.warn(`LeetCode GraphQL returned an error: ${payload.errors[0].message}`);
+
+    throw new Error(
+      LEETCODE_ERRORS.apiError.replace("{{message}}", payload.errors[0].message)
+    );
+  }
 }
